@@ -261,3 +261,9 @@ TunedRandomForest:
 #    _n_jobs: 1  # cf. RandomForest
 #    _tuning:
 #      n_estimators: 500
+
+TFMAutoML_Test:
+  description: "Mi framework AutoML de TFM"
+  version: "0.0.1"
+  module: frameworks.TFMAutoML_Test
+
