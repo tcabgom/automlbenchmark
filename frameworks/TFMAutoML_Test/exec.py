@@ -13,8 +13,8 @@ log = logging.getLogger(__name__)
 def run(dataset, config):
 
     # Imports dentro de run() para evitar problemas de paquete???
-    from frameworks.TFMAutoML_Test.TFM.BasicAutoML.src.main import TFM_AutoML
-    from frameworks.TFMAutoML_Test.TFM.BasicAutoML.src.config import AutoMLConfig
+    from basicautoml.main import TFM_AutoML
+    from basicautoml.config import AutoMLConfig
     # from frameworks.TFMAutoML_Test.TFM.BasicAutoML.src.data_loader import DataLoader
 
     # AMLB helpers
@@ -92,15 +92,19 @@ def run(dataset, config):
     # Guardar artefactos si se solicita
     save_artifacts(automl, config, output_subdir)
 
-    return result(
+    kwargs = dict(
         output_file=getattr(config, "output_predictions_file", None),
         predictions=preds,
         probabilities=preds_proba,
         truth=y_test,
         training_duration=training.duration,
         predict_duration=predict.duration,
-        inference_times=inference_times,
     )
+
+    if inference_times:  # solo si no está vacío
+        kwargs["inference_times"] = inference_times
+
+    return result(**kwargs)
 
 
 def save_artifacts(automl, config, output_subdir_fn):
