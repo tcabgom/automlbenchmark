@@ -5,42 +5,56 @@ import os
 import logging
 import pickle
 import numpy as np
+import json
+import time
 
 log = logging.getLogger(__name__)
 
 # COMANDO: python runbenchmark.py TFMAutoML_Test test -f 0 -m local
 
 def run(dataset, config):
+    """
+    Ejecutar TFM_AutoML con los datos y configuracion dados
 
-    # Imports dentro de run() para evitar problemas de paquete???
+    Args:
+        dataset: objeto Dataset de AMLB con los datos de train/test
+        config: objeto Config de AMLB con la configuracion del benchmark (tipo de problema, metricas, etc)
+    """
     from basicautoml.main import TFM_AutoML
     from basicautoml.config import AutoMLConfig
-    # from frameworks.TFMAutoML_Test.TFM.BasicAutoML.src.data_loader import DataLoader
 
-    # AMLB helpers
+    # result: Helper del bechmark para recoger/gardar resultados
+    # output_subdir: Helper para crear subdirectorios de salida
+    # measure_inference_times: Helper para medir tiempos de inferencia
+    # Timer: Context manager para medir tiempos
     from frameworks.shared.callee import result, output_subdir, measure_inference_times
     from frameworks.shared.utils import Timer
 
     log.info("**** Running AutoML ****")
 
-    # Necesario para AutoMLBenchmark
+    # Detectar si es clasificacion o regresion e intentar sacar el nombre de la etiqueta
     is_classification = getattr(config, "type", None) == "classification"
     label = getattr(dataset, "target", None)
     if label is not None:
         label = label.name if hasattr(label, "name") else label
 
-    X_train = dataset.train.X
-    y_train = dataset.train.y
-    X_test = dataset.test.X
-    y_test = dataset.test.y
+    # Extraer los datos que AMLB pasa
+    X_train, y_train = dataset.train.X, dataset.train.y
+    X_test, y_test = dataset.test.X, dataset.test.y
 
+    # Asegurar que las etiquetas son str en clasificacion para asegurar que no las interpreta como continuas, sino categoricas
     if is_classification:
-        # Asegurarnos que no hay NaNs y convertir a str si hace falta
-        y_train = y_train.astype(str)
-        y_test = y_test.astype(str)
+        try:
+            y_train = y_train.astype(str)
+            y_test = y_test.astype(str)
+        except Exception:
+            # si no tiene astyp, forzamos con list comprehension
+            y_train = [str(v) for v in y_train]
+            y_test = [str(v) for v in y_test]
 
+    # Configurar AutoML
     automl_config = AutoMLConfig(
-        test_size=0.2, # TODO Deberia ponerlo a 0, el benchmark creo que lo divide ya
+        test_size=0.2,
         random_state=42,
         search_type="bayesian",
         scoring="roc_auc",
@@ -49,62 +63,36 @@ def run(dataset, config):
         timeout=20
     )
 
+    # Crear instancia de AutoML a partir de la configuracion
     automl = TFM_AutoML(automl_config)
 
-    print("Training...")
+    # Entrenar con el conjunto de entrenamiento
     with Timer() as training:
         automl.fit(X_train, y_train)
-    print(f"Training finished in {training.duration:.2f}s")
 
-    print("Predicting...")
+    # Predecir con el conjunto de prueba
     with Timer() as predict:
-        # Intentar predict_proba, si no existe usar predict
-        if hasattr(automl, "predict_proba"):
-            preds_proba = automl.predict_proba(X_test)
-            if is_classification:
-                # Si devuelve probas por clase, tomar argmax
-                if preds_proba is None:
-                    preds = [None] * len(X_test)
-                else:
-                    preds_idx = np.argmax(preds_proba, axis=1)
-                    # mapear clases si existe label encoder
-                    if hasattr(automl, "label_encoder_") and hasattr(automl.label_encoder_, "classes_"):
-                        classes = automl.label_encoder_.classes_
-                        preds = [classes[i] for i in preds_idx]
-                    else:
-                        preds = preds_idx.tolist()
-            else:
-                preds = preds_proba # Regresion
-        else: # No existe predict_proba
-            preds = automl.predict(X_test) 
-            preds_proba = None
-    print(f"Prediction finished in {predict.duration:.2f}s")
+        preds_proba = automl.predict_proba(X_test) # Obtenemos probabilidades
+        preds = np.argmax(preds_proba, axis=1)     # Convertimos a etiquetas TODO esto se podria mejorar
 
-    # Measure inference times si esta habilitado
-    inference_times = {}
-    if getattr(config, "measure_inference_time", False):
-        def infer(data):
-            # same guard: prefer predict_proba si existe
-            if hasattr(automl, "predict_proba"):
-                return automl.predict_proba(data)
-            return automl.predict(data)
-
-    # Guardar artefactos si se solicita
+    # Guardar artefactos si se pide
     save_artifacts(automl, config, output_subdir)
 
-    kwargs = dict(
+    # Devolver resultados
+    return result(
+        # Ruta donde guardar las predicciones. None significa que no se guardan
         output_file=getattr(config, "output_predictions_file", None),
+        # Predicciones de clase (n_samples,) o None si no se tienen
         predictions=preds,
+        # Predicciones de probabilidad (n_samples, n_classes) o None si no se tienen
         probabilities=preds_proba,
+        # Valores reales (n_samples,) o None si no se tienen
         truth=y_test,
+        # Tiempos de entrenamiento (automl.fit)
         training_duration=training.duration,
+        # Tiempos de prediccion (automl.predict)
         predict_duration=predict.duration,
     )
-
-    if inference_times:  # solo si no está vacío
-        kwargs["inference_times"] = inference_times
-
-    return result(**kwargs)
 
 
 def save_artifacts(automl, config, output_subdir_fn):
@@ -121,6 +109,5 @@ def save_artifacts(automl, config, output_subdir_fn):
 
 
 if __name__ == "__main__":
-    # Importar call_run solo en ejecucion directa, evita imports top-level de frameworks
     from frameworks.shared.callee import call_run
     call_run(run)
