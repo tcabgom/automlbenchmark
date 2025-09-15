@@ -317,6 +317,20 @@ class Scoreboard:
         )
         scores = self.as_data_frame().append(to_append)
         if no_duplicates:
+            import json
+
+            def make_hashable(x):
+                if isinstance(x, (dict, list, tuple)):
+                    try:
+                        return json.dumps(x, default=str)
+                    except Exception:
+                        return str(x)
+                return x
+
+            for col in scores.columns:
+                if scores[col].apply(lambda x: isinstance(x, (dict, list, tuple))).any():
+                    print(f"[SANITIZE] Columna {col!r} contenía listas/tuplas/dicts, convirtiendo a JSON.")
+                    scores[col] = scores[col].apply(make_hashable)
             scores = scores.drop_duplicates()
         return Scoreboard(
             scores=scores,
